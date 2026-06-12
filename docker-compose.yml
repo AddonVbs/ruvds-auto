@@ -1,20 +1,16 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
-    container_name: vleg-postgres
+    container_name: ruvds-postgres
     restart: always
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: postgres
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${Password}
+      POSTGRES_DB: ${DB_NAME:-postgres}
     volumes:
       - pgdata:/var/lib/postgresql/data
 
 volumes:
   pgdata:
-    external: true
-    name: vleg_pgdata
