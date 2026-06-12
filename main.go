@@ -11,6 +11,9 @@ import (
 
 	"modul/internal/bot"
 	"modul/internal/config"
+	"modul/internal/db"
+	"modul/internal/ruvds"
+	"modul/internal/service"
 )
 
 func main() {
@@ -21,7 +24,16 @@ func main() {
 		log.Fatalf("config: %v", err)
 	}
 
-	b, err := bot.New(cfg)
+	gormDB, err := db.Init()
+	if err != nil {
+		log.Fatalf("db: %v", err)
+	}
+
+	repo := service.NewRepository(gormDB)
+	client := ruvds.New(cfg.RuvdsToken)
+	svc := service.New(cfg, repo, client)
+
+	b, err := bot.New(cfg, svc)
 	if err != nil {
 		log.Fatalf("bot init: %v", err)
 	}

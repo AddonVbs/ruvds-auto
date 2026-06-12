@@ -6,27 +6,25 @@ import (
 	"log"
 	"strconv"
 	"strings"
-	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
 	"modul/internal/config"
-	"modul/internal/probe"
-	"modul/internal/ruvds"
+	"modul/internal/service"
 )
 
 type Bot struct {
-	api   *tgbotapi.BotAPI
-	cfg   *config.Config
-	ruvds *ruvds.Client
+	api *tgbotapi.BotAPI
+	cfg *config.Config
+	svc *service.Service
 }
 
-func New(cfg *config.Config) (*Bot, error) {
+func New(cfg *config.Config, svc *service.Service) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.TelegramToken)
 	if err != nil {
 		return nil, err
 	}
-	return &Bot{api: api, cfg: cfg, ruvds: ruvds.New(cfg.RuvdsToken)}, nil
+	return &Bot{api: api, cfg: cfg, svc: svc}, nil
 }
 
 func (b *Bot) Run(ctx context.Context) error {
@@ -69,14 +67,18 @@ func (b *Bot) handleMessage(ctx context.Context, m *tgbotapi.Message) {
 	switch {
 	case text == "/start", text == "/help":
 		b.reply(m.Chat.ID,
-			"Привет.\n"+
-				"/create — создать сервер ("+strconv.Itoa(b.cfg.IPCount)+" IP) и проверить пингом\n"+
-				"/list — нет (используй кнопки под сообщением /create)\n"+
+			"/create — создать VDS (IP="+strconv.Itoa(b.cfg.IPCount)+") и проверить пингом\n"+
+				"/list — активные серверы\n"+
+				"/info — ID датацентров и ОС из RuVDS\n"+
 				"/whoami — твой Telegram ID")
 	case text == "/whoami":
 		b.reply(m.Chat.ID, fmt.Sprintf("ID: %d", m.From.ID))
 	case text == "/create":
 		b.cmdCreate(ctx, m.Chat.ID)
+	case text == "/list":
+		b.cmdList(m.Chat.ID)
+	case text == "/info":
+		b.cmdInfo(ctx, m.Chat.ID)
 	default:
 		b.reply(m.Chat.ID, "Не понял. /help")
 	}
@@ -85,76 +87,86 @@ func (b *Bot) handleMessage(ctx context.Context, m *tgbotapi.Message) {
 func (b *Bot) cmdCreate(ctx context.Context, chatID int64) {
 	statusMsg, _ := b.api.Send(tgbotapi.NewMessage(chatID, "Отправляю запрос на создание сервера…"))
 
-	name := fmt.Sprintf("%s-%d", b.cfg.ComputerName, time.Now().Unix())
-	createReq := ruvds.ServerCreateReq{
-		Datacenter:    b.cfg.Datacenter,
-		TariffID:      b.cfg.TariffID,
-		OSID:          b.cfg.OSID,
-		PaymentPeriod: b.cfg.PaymentPeriod,
-		CPU:           b.cfg.CPU,
-		RAM:           b.cfg.RAM,
-		Drive:         b.cfg.Drive,
-		DriveTariffID: b.cfg.DriveTariffID,
-		IP:            b.cfg.IPCount,
-		ComputerName:  name,
-		UserComment:   "created via tg-bot",
-	}
-
-	resp, err := b.ruvds.CreateServer(ctx, createReq)
-	if err != nil {
+	res, err := b.svc.Create(ctx)
+	if err != nil && res == nil {
 		b.editText(chatID, statusMsg.MessageID, "Ошибка создания: "+err.Error())
 		return
 	}
 
-	b.editText(chatID, statusMsg.MessageID,
-		fmt.Sprintf("Сервер #%d, ожидаю готовности (стоимость %.2f ₽)…",
-			resp.VirtualServerID, resp.CostRub))
-
-	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
-	act, err := b.ruvds.WaitAction(waitCtx, resp.Action.ID, 5*time.Second)
+	header := fmt.Sprintf("Сервер #%d в ДЦ %d готов. Пароль: <code>%s</code>",
+		res.Server.VirtualServerID, res.Datacenter, res.Server.Password)
+	if res.CostRub > 0 {
+		header += fmt.Sprintf(" (стоимость %.2f ₽)", res.CostRub)
+	}
 	if err != nil {
-		b.editText(chatID, statusMsg.MessageID,
-			fmt.Sprintf("Сервер #%d создан, но ожидание прервано: %v", resp.VirtualServerID, err))
-		return
+		header += "\n\n⚠️ " + err.Error()
 	}
-	if act.Status != "success" {
-		b.editText(chatID, statusMsg.MessageID,
-			fmt.Sprintf("Сервер #%d: действие завершилось со статусом %q", resp.VirtualServerID, act.Status))
-		return
-	}
-
-	nets, err := b.ruvds.GetNetworks(ctx, resp.VirtualServerID)
-	if err != nil {
-		b.editText(chatID, statusMsg.MessageID,
-			fmt.Sprintf("Сервер #%d готов, но получить IP не удалось: %v", resp.VirtualServerID, err))
-		return
-	}
-
-	ips := make([]string, 0, len(nets.V4))
-	for _, n := range nets.V4 {
-		ips = append(ips, n.IPAddress)
-	}
-
-	results := probe.CheckAll(ips, 3*time.Second)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Сервер #%d готов. Пароль: <code>%s</code>\n\nIP-адреса:\n", resp.VirtualServerID, resp.Password))
-	for _, r := range results {
+	sb.WriteString(header)
+	sb.WriteString("\n\nIP-адреса:\n")
+	for _, ip := range res.Server.IPs {
 		mark := "❌"
 		extra := ""
-		if r.Alive {
+		if ip.Alive {
 			mark = "✅"
-			extra = fmt.Sprintf(" (порт %d)", r.Port)
+			extra = fmt.Sprintf(" (порт %d)", ip.Port)
 		}
-		sb.WriteString(fmt.Sprintf("%s <code>%s</code>%s\n", mark, r.IP, extra))
+		sb.WriteString(fmt.Sprintf("%s <code>%s</code>%s\n", mark, ip.Address, extra))
 	}
 
 	msg := tgbotapi.NewMessage(chatID, sb.String())
 	msg.ParseMode = "HTML"
-	msg.ReplyMarkup = deleteKeyboard(resp.VirtualServerID, false)
+	msg.ReplyMarkup = deleteKeyboard(res.Server.VirtualServerID, false)
 	b.api.Send(msg)
 	b.api.Send(tgbotapi.NewDeleteMessage(chatID, statusMsg.MessageID))
+}
+
+func (b *Bot) cmdList(chatID int64) {
+	servers, err := b.svc.ListActive()
+	if err != nil {
+		b.reply(chatID, "Ошибка БД: "+err.Error())
+		return
+	}
+	if len(servers) == 0 {
+		b.reply(chatID, "Активных серверов нет.")
+		return
+	}
+	var sb strings.Builder
+	for _, s := range servers {
+		sb.WriteString(fmt.Sprintf("#%d (ДЦ %d), IP: ", s.VirtualServerID, s.Datacenter))
+		ips := make([]string, 0, len(s.IPs))
+		for _, ip := range s.IPs {
+			ips = append(ips, ip.Address)
+		}
+		sb.WriteString(strings.Join(ips, ", "))
+		sb.WriteString("\n")
+	}
+	b.reply(chatID, sb.String())
+}
+
+func (b *Bot) cmdInfo(ctx context.Context, chatID int64) {
+	rep, err := b.svc.Info(ctx)
+	if err != nil {
+		b.reply(chatID, "Ошибка: "+err.Error())
+		return
+	}
+	var sb strings.Builder
+	sb.WriteString("<b>Датацентры:</b>\n")
+	for _, d := range rep.Datacenters {
+		sb.WriteString(fmt.Sprintf("id=%d  %s\n   vps_tariffs=%v  drive_tariffs=%v\n",
+			d.ID, d.Name, d.VPSTariffs, d.DriveTariffs))
+	}
+	sb.WriteString("\n<b>ОС:</b>\n")
+	for _, o := range rep.OS {
+		if !o.IsActive {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("id=%d  [%s]  %s\n", o.ID, o.Type, o.Name))
+	}
+	msg := tgbotapi.NewMessage(chatID, sb.String())
+	msg.ParseMode = "HTML"
+	b.api.Send(msg)
 }
 
 func deleteKeyboard(serverID int, confirm bool) tgbotapi.InlineKeyboardMarkup {
@@ -188,20 +200,19 @@ func (b *Bot) handleCallback(ctx context.Context, cb *tgbotapi.CallbackQuery) {
 
 	switch parts[0] {
 	case "del":
-		edit := tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, deleteKeyboard(id, true))
-		b.api.Send(edit)
+		b.api.Send(tgbotapi.NewEditMessageReplyMarkup(
+			cb.Message.Chat.ID, cb.Message.MessageID, deleteKeyboard(id, true)))
 		b.api.Request(tgbotapi.NewCallback(cb.ID, "Подтверди удаление."))
 
 	case "delno":
-		edit := tgbotapi.NewEditMessageReplyMarkup(cb.Message.Chat.ID, cb.Message.MessageID, deleteKeyboard(id, false))
-		b.api.Send(edit)
+		b.api.Send(tgbotapi.NewEditMessageReplyMarkup(
+			cb.Message.Chat.ID, cb.Message.MessageID, deleteKeyboard(id, false)))
 		b.api.Request(tgbotapi.NewCallback(cb.ID, "Отменено."))
 
 	case "delyes":
 		b.api.Request(tgbotapi.NewCallback(cb.ID, "Удаляю…"))
-		_, err := b.ruvds.DeleteServer(ctx, id)
 		var note string
-		if err != nil {
+		if err := b.svc.Delete(ctx, id); err != nil {
 			note = fmt.Sprintf("\n\n❌ Ошибка удаления: %s", err.Error())
 		} else {
 			note = fmt.Sprintf("\n\n🗑 Сервер #%d помечен на удаление.", id)

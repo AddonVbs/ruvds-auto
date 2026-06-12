@@ -4,16 +4,36 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
+
+func intList(s string) []int {
+	if s == "" {
+		return nil
+	}
+	var out []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		n, err := strconv.Atoi(p)
+		if err == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
 
 type Config struct {
 	TelegramToken string
 	OwnerTGID     int64
 	RuvdsToken    string
 
-	Datacenter    int
-	TariffID      int
-	OSID          int
+	Datacenter         int
+	AllowedDatacenters []int // если непусто — DC выбирается случайно из этого списка
+	TariffID           int
+	OSID               int
 	PaymentPeriod int
 	CPU           int
 	RAM           float64
@@ -44,15 +64,16 @@ func Load() (*Config, error) {
 	c.OwnerTGID = owner
 
 	c.Datacenter = mustInt("DEFAULT_DATACENTER", 1)
+	c.AllowedDatacenters = intList(os.Getenv("ALLOWED_DATACENTERS"))
 	c.TariffID = mustInt("DEFAULT_TARIFF_ID", 14)
 	c.OSID = mustInt("DEFAULT_OS_ID", 52)
 	c.PaymentPeriod = mustInt("DEFAULT_PAYMENT_PERIOD", 2)
-	c.CPU = mustInt("DEFAULT_CPU", 2)
+	c.CPU = mustInt("DEFAULT_CPU", 1)
 	c.Drive = mustInt("DEFAULT_DRIVE", 20)
-	c.DriveTariffID = mustInt("DEFAULT_DRIVE_TARIFF_ID", 3)
+	c.DriveTariffID = mustInt("DEFAULT_DRIVE_TARIFF_ID", 1)
 	c.IPCount = mustInt("DEFAULT_IP_COUNT", 6)
 
-	ram, err := strconv.ParseFloat(envOr("DEFAULT_RAM", "2"), 64)
+	ram, err := strconv.ParseFloat(envOr("DEFAULT_RAM", "1"), 64)
 	if err != nil {
 		return nil, fmt.Errorf("DEFAULT_RAM: %w", err)
 	}

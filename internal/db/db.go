@@ -2,43 +2,47 @@ package db
 
 import (
 	"fmt"
-	"log"
 	"os"
 
-	gv "github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	"modul/internal/model"
 )
 
-func Iint() (*gorm.DB, error) {
-
-	err := gv.Load()
-	if err != nil {
-		log.Fatal("Env file not load", err)
-		return nil, nil
-	}
-
+// Init поднимает соединение с Postgres и накатывает миграции по моделям.
+// .env уже загружен на уровне main.go.
+func Init() (*gorm.DB, error) {
 	pass := os.Getenv("Password")
-	if pass == " " {
-		log.Fatal("Env file not have Password for db ", err)
-		return nil, nil
+	if pass == "" {
+		return nil, fmt.Errorf("env Password is empty")
 	}
+
+	host := envOr("DB_HOST", "localhost")
+	port := envOr("DB_PORT", "5432")
+	user := envOr("DB_USER", "postgres")
+	name := envOr("DB_NAME", "postgres")
 
 	dsn := fmt.Sprintf(
-		"host=localhost user=postgres password=%s dbname=ruvds port=8010 sslmode=disable",
-		pass,
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+		host, user, pass, name, port,
 	)
 
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("gorm open: %w", err)
 	}
 
-	err = db.AutoMigrate()
-	if err != nil {
-		return nil, err
+	if err := db.AutoMigrate(&model.Server{}, &model.IP{}); err != nil {
+		return nil, fmt.Errorf("automigrate: %w", err)
 	}
 
 	return db, nil
+}
 
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
