@@ -1,0 +1,24 @@
+# Secrets
+.env
+
+# Go build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/detest
+
+
+# Vendor
+vendor/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+vleg-bot
