@@ -39,6 +39,17 @@ func (r *Repository) ListActive() ([]model.Server, error) {
 	return out, err
 }
 
+// ListAll возвращает всю историю — и активные, и помеченные удалёнными.
+func (r *Repository) ListAll(limit int) ([]model.Server, error) {
+	var out []model.Server
+	q := r.db.Preload("IPs").Order("created_at DESC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Find(&out).Error
+	return out, err
+}
+
 // MarkDeleted ставит метку удаления (фактической записи не удаляем — нужна история).
 func (r *Repository) MarkDeleted(vsID int) error {
 	now := time.Now()

@@ -111,19 +111,6 @@ type Datacenter struct {
 	DriveTariffs  []int  `json:"drive_tariffs"`
 }
 
-type OS struct {
-	ID       int    `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	IsActive bool   `json:"is_active"`
-}
-
-type Tariff struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-}
-
 func (c *Client) ListDatacenters(ctx context.Context) ([]Datacenter, error) {
 	var out struct {
 		Datacenters []Datacenter `json:"datacenters"`
@@ -132,36 +119,6 @@ func (c *Client) ListDatacenters(ctx context.Context) ([]Datacenter, error) {
 		return nil, err
 	}
 	return out.Datacenters, nil
-}
-
-func (c *Client) ListOS(ctx context.Context) ([]OS, error) {
-	var out struct {
-		OS []OS `json:"os"`
-	}
-	if err := c.do(ctx, http.MethodGet, "/v2/os", nil, &out); err != nil {
-		return nil, err
-	}
-	return out.OS, nil
-}
-
-// ListTariffs returns raw JSON because the tariffs response has many fields
-// we don't model yet; the bot just dumps the names/IDs to the operator.
-func (c *Client) ListTariffsRaw(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL+"/v2/tariffs", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(raw)}
-	}
-	return raw, nil
 }
 
 func (c *Client) CreateServer(ctx context.Context, req ServerCreateReq) (*ServerCreateResp, error) {

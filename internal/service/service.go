@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"sync"
 	"time"
 
 	"modul/internal/config"
@@ -17,10 +18,41 @@ type Service struct {
 	cfg   *config.Config
 	repo  *Repository
 	ruvds *ruvds.Client
+
+	dcCache    map[int]string
+	dcCacheExp time.Time
+	dcMu       sync.Mutex
 }
 
 func New(cfg *config.Config, repo *Repository, client *ruvds.Client) *Service {
 	return &Service{cfg: cfg, repo: repo, ruvds: client}
+}
+
+// DatacenterName возвращает человеко-читаемое имя ДЦ по id,
+// кэшируя список с RuVDS на час. Если не удалось — возвращает "DC <id>".
+func (s *Service) DatacenterName(ctx context.Context, id int) string {
+	s.dcMu.Lock()
+	defer s.dcMu.Unlock()
+
+	if time.Now().After(s.dcCacheExp) || s.dcCache == nil {
+		dcs, err := s.ruvds.ListDatacenters(ctx)
+		if err == nil {
+			s.dcCache = make(map[int]string, len(dcs))
+			for _, d := range dcs {
+				s.dcCache[d.ID] = d.Name
+			}
+			s.dcCacheExp = time.Now().Add(time.Hour)
+		}
+	}
+	if name, ok := s.dcCache[id]; ok {
+		return name
+	}
+	return fmt.Sprintf("DC %d", id)
+}
+
+// ListHistory возвращает всю историю серверов (для команды "Логи").
+func (s *Service) ListHistory(limit int) ([]model.Server, error) {
+	return s.repo.ListAll(limit)
 }
 
 // CreateResult — то, что хочет показать бот после /create.
@@ -111,27 +143,14 @@ func (s *Service) Delete(ctx context.Context, virtualServerID int) error {
 	return nil
 }
 
-// ListActive возвращает активные серверы (для будущей команды /list).
+// ListActive возвращает активные серверы (для кнопки «Инфо»).
 func (s *Service) ListActive() ([]model.Server, error) {
 	return s.repo.ListActive()
 }
 
-// Info собирает справку по доступным DC / ОС для оператора.
-type InfoReport struct {
-	Datacenters []ruvds.Datacenter
-	OS          []ruvds.OS
-}
-
-func (s *Service) Info(ctx context.Context) (*InfoReport, error) {
-	dcs, err := s.ruvds.ListDatacenters(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list datacenters: %w", err)
-	}
-	oses, err := s.ruvds.ListOS(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("list os: %w", err)
-	}
-	return &InfoReport{Datacenters: dcs, OS: oses}, nil
+// GetByVirtualServerID возвращает сервер по id из RuVDS вместе с его IP.
+func (s *Service) GetByVirtualServerID(vsID int) (*model.Server, error) {
+	return s.repo.GetByVirtualServerID(vsID)
 }
 
 func (s *Service) pickDatacenter() int {
